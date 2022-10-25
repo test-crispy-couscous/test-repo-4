@@ -1,0 +1,126 @@
+name: Setup Repo
+
+on:
+  create:
+  workflow_dispatch:
+
+env:
+  SONAR_CLOUD_QUALITY_GATE_ID: 70954
+  DOTNET_TEMPLATE: opniatedwebapi
+  SONAR_CLOUD_INSTALLATION_ID: 28005684
+  SONAR_CLOUD_ORGANIZATION: test-crispy-couscous
+  AZURE_DEVOPS_ORGANIZATION: rafaelpmiranda0166
+  AZURE_DEVOPS_PROJECT: POCs
+  AZURE_DEVOPS_ORGANIZATION_FOLDER: marketplace
+  AZURE_DEVOPS_CONNECTION_ID: 63af77f1-b625-4e1e-858f-5383911552a7
+
+jobs:
+  run-template:
+    name: Run template
+    runs-on: ubuntu-latest
+    if: github.event.repository.name != 'dotnet-template' # remember to change in other places
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2.4.2
+
+      - name: Install template
+        run: dotnet new --install ./
+
+      - name: Create project name as PascalCase
+        run: |
+          import os
+
+          env_file = os.getenv('GITHUB_ENV')
+
+          pascal_case_repository_name = "${{ github.event.repository.name }}".replace("-", " ").title().replace(" ", "")
+
+          with open(env_file, "a") as file:
+            file.write(f"PROJECT_NAME={pascal_case_repository_name}")
+        shell: python
+
+      - name: Create project
+        run: dotnet new $DOTNET_TEMPLATE -o temp-dir --name $PROJECT_NAME --repository ${{ github.event.repository.name }}
+
+      - name: Prepare root directory
+        shell: bash
+        # Remove all files and folder except .git/ and temp-dir/
+        run: |
+          find ./ -maxdepth 1 \
+          ! -name '.git' \
+          ! -name 'temp-dir' \
+          ! -name '.' \
+          ! -exec rm -rf {} +
+      - name: Move files to root
+        shell: bash
+        run: |
+          rsync -r ./temp-dir/ . && \
+          rm -rf ./temp-dir/
+      - name: Reinitialize git repository
+        shell: bash
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com" && \
+          git config --global user.name "github-actions[bot]" && \
+          git add . && \
+          git commit -m 'Initial commit' && \
+          git push origin
+
+  create-devops-pipeline:
+    name: Create Azure DevOps pipeline
+    runs-on: ubuntu-latest
+    if: github.event.repository.name != 'dotnet-template' # remember to change in other places
+    needs: run-template
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2.4.2
+      - name: Setup Python Version
+        uses: actions/setup-python@v2
+        with:
+          python-version: "3.10"
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade requests
+
+      - name: Add Azure DevOps Pipeline
+        shell: bash
+        env:
+          azure_devops_secret: ${{ secrets.AZURE_DEVOPS_PIPELINE_SECRET }}
+        run: |
+          set -e
+
+          python .github/workflows/add_azure_devops_pipeline.py \
+            --azure-devops-access-token "$azure_devops_secret" \
+            --repository-full-name ${{ github.event.repository.full_name }} \
+            --devops-organization "$AZURE_DEVOPS_ORGANIZATION" \
+            --devops-project "$AZURE_DEVOPS_PROJECT" \
+            --devops-folder "$AZURE_DEVOPS_ORGANIZATION_FOLDER" \
+            --connection-id "$AZURE_DEVOPS_CONNECTION_ID"
+
+  sonar-configuration:
+    if: github.event.repository.name != 'dotnet-template' # remember to change in other places
+    runs-on: ubuntu-latest
+    needs: run-template
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2.4.2
+      - name: Setup Python Version
+        uses: actions/setup-python@v2
+        with:
+          python-version: "3.10"
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade requests python-sonarqube-api PyGithub
+
+      - name: Add SonarCloud project
+        shell: bash
+        env:
+          sonar_cloud_access_token: ${{ secrets.SONAR_ACCESS_TOKEN }}
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+
+          python .github/workflows/add_repository_sonar_cloud.py \
+            --repository-name ${{ github.event.repository.full_name }} \
+            --github-access-token "$github_access_token" \
+            --sonar-cloud-access-token "$sonar_cloud_access_token" \
+            --sonar-cloud-organization "$SONAR_CLOUD_ORGANIZATION" \
+            --sonar-cloud-quality-gate-id $SONAR_CLOUD_QUALITY_GATE_ID
