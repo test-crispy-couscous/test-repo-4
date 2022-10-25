@@ -9,7 +9,7 @@
     }
   },
   "profiles": {
-    "AspnetTemplate": {
+    "TestRepo4": {
       "commandName": "Project",
       "dotnetRunMessages": true,
       "launchBrowser": true,
